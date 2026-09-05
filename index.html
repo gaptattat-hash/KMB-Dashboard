@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="30">
+  <title>KMB Live ETA Dashboard</title>
+  <style>
+    :root {
+      --bg-color: #0f172a;
+      --card-bg: #1e293b;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #ef4444; /* KMB Red */
+      --highlight: #38bdf8;
+    }
+
+    /* E-Ink friendly high-contrast theme via query string (?eink=1) */
+    body.eink {
+      --bg-color: #ffffff;
+      --card-bg: #ffffff;
+      --text-main: #000000;
+      --text-muted: #444444;
+      --accent: #000000;
+      --highlight: #000000;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      margin: 0;
+      padding: 1.5rem;
+      box-sizing: border-box;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      border-bottom: 2px solid var(--accent);
+      padding-bottom: 0.5rem;
+    }
+
+    h1 { margin: 0; font-size: 1.5rem; }
+    #last-updated { font-size: 0.85rem; color: var(--text-muted); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    body.eink .card { border: 2px solid #000; }
+
+    .route-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 0.5rem;
+    }
+
+    .route-number {
+      font-size: 1.8rem;
+      font-weight: bold;
+      color: var(--accent);
+    }
+
+    body.eink .route-number { color: #000; }
+
+    .destination {
+      font-size: 1rem;
+      color: var(--text-muted);
+    }
+
+    .eta-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .eta-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.4rem 0;
+      border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+    }
+
+    body.eink .eta-item { border-bottom: 1px dashed #000; }
+
+    .eta-time { font-weight: bold; color: var(--highlight); }
+    body.eink .eta-time { color: #000; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>KMB ETA Dashboard</h1>
+    <div id="last-updated">Updating...</div>
+  </header>
+
+  <div class="grid" id="dashboard"></div>
+
+  <script>
+    // Configuration: Add your targets here
+    // Find Stop IDs using https://data.etabus.gov.hk/v1/transport/kmb/stop
+    const WATCH_LIST = [
+      { route: "968x",  stopId: "0C943B7308FF4DCC", serviceType: 1 },
+      { route: "102", stopId: "647AB0AD358F10DF", serviceType: 1 }
+    ];
+
+    // Check for E-Ink high-contrast query flag (?eink=1)
+    if (new URLSearchParams(window.location.search).get('eink') === '1') {
+      document.body.classList.add('eink');
+    }
+
+    async function fetchETA(stopId, route, serviceType) {
+      const url = `https://data.etabus.gov.hk/v1/transport/kmb/eta/${stopId}/${route}/${serviceType}`;
+      try {
+        const response = await fetch(url);
+        const json = await response.json();
+        return json.data || [];
+      } catch (err) {
+        console.error("API Fetch Error:", err);
+        return [];
+      }
+    }
+
+    function calculateMinutes(etaString) {
+      if (!etaString) return "No data";
+      const etaTime = new Date(etaString);
+      const diffMs = etaTime - new Date();
+      const diffMins = Math.ceil(diffMs / 60000);
+      return diffMins <= 0 ? "Arriving" : `${diffMins} min`;
+    }
+
+    async function updateDashboard() {
+      const container = document.getElementById("dashboard");
+      container.innerHTML = "";
+
+      for (const target of WATCH_LIST) {
+        const etas = await fetchETA(target.stopId, target.route, target.serviceType);
+        const card = document.createElement("div");
+        card.className = "card";
+
+        const destName = etas[0]?.dest_tc || "Unknown Destination";
+        let etaRows = "";
+
+        if (etas.length === 0) {
+          etaRows = `<li class="eta-item">No upcoming departures</li>`;
+        } else {
+          etas.slice(0, 3).forEach(item => {
+            const minText = calculateMinutes(item.eta);
+            const timeFormatted = item.eta ? new Date(item.eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "--:--";
+            const remark = item.rmk_tc ? `(${item.rmk_tc})` : "";
+            
+            etaRows += `
+              <li class="eta-item">
+                <span>${timeFormatted} ${remark}</span>
+                <span class="eta-time">${minText}</span>
+              </li>`;
+          });
+        }
+
+        card.innerHTML = `
+          <div class="route-header">
+            <span class="route-number">${target.route}</span>
+            <span class="destination">往 ${destName}</span>
+          </div>
+          <ul class="eta-list">${etaRows}</ul>
+        `;
+        container.appendChild(card);
+      }
+
+      document.getElementById("last-updated").textContent = "Updated: " + new Date().toLocaleTimeString();
+    }
+
+    updateDashboard();
+    setInterval(updateDashboard, 20000); // Dynamic update every 20s for iPad
+  </script>
+</body>
+</html>
